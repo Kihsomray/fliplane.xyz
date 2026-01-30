@@ -93,17 +93,30 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
           // Get the first converted blob (heic2any can return multiple for multi-image HEIC)
           const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
           
+          if (!convertedBlob) {
+            throw new Error('HEIC conversion returned no result');
+          }
+          
+          // Sanitize filename to avoid invalid characters
+          const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
+          
           // Create a new File object with JPEG type
           fileToUpload = new File(
             [convertedBlob as Blob],
-            file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+            sanitizedName || 'converted-image.jpg',
             { type: 'image/jpeg' }
           );
           
           setProgress('Uploading...');
         } catch (heicErr) {
           console.error('HEIC conversion failed:', heicErr);
-          setError('Failed to convert HEIC image. Please convert it to JPEG or PNG first.');
+          const errorMessage = heicErr instanceof Error ? heicErr.message : 'Unknown error';
+          // Check if it's the specific "pattern" error
+          if (errorMessage.includes('pattern') || errorMessage.includes('atob') || errorMessage.includes('btoa')) {
+            setError('HEIC file format issue. Please try converting the image to JPEG using your device\'s photo app first.');
+          } else {
+            setError(`Failed to convert HEIC image: ${errorMessage}. Please convert it to JPEG or PNG first.`);
+          }
           return;
         }
       } else {
