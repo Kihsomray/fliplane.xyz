@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { removeBackground } from '@/lib/removebg';
-import { uploadToB2 } from '@/lib/backblaze';
+import { uploadToB2, getSignedDownloadUrl } from '@/lib/backblaze';
 import { checkDemoRateLimit } from '@/lib/ratelimit';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -65,11 +65,21 @@ export async function POST(request: NextRequest) {
 
     const publicUrl = await uploadToB2(storageKey, processedBuffer, 'image/png');
 
+    // For demo (anonymous) uploads, the bucket might be private.
+    // We should generate a signed URL for display, similar to how we fixed the user upload.
+    
+    let displayUrl = publicUrl;
+    try {
+        displayUrl = await getSignedDownloadUrl(storageKey, 3600);
+    } catch (e) {
+        console.warn('Failed to generate signed URL for demo display, using public URL');
+    }
+
     return NextResponse.json(
       {
         success: true,
         imageId,
-        url: publicUrl,
+        url: displayUrl, // Use signed URL for immediate display
         storageKey,
       },
       {
