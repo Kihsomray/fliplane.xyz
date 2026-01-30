@@ -8,7 +8,9 @@ export async function removeBackground(imageBuffer: Buffer): Promise<Buffer> {
   }
 
   const formData = new FormData();
-  formData.append('image_file', new Blob([imageBuffer]), 'image.png');
+  // Ensure the buffer is treated as a BlobPart compatible type
+  const blob = new Blob([new Uint8Array(imageBuffer)]);
+  formData.append('image_file', blob, 'image.png');
   formData.append('size', 'auto');
 
   const response = await fetch('https://api.remove.bg/v1.0/removebg', {
