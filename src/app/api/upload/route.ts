@@ -77,8 +77,10 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
+    // Store original file to B2
     await uploadToB2(originalKey, buffer, file.type);
-
+    
+    // Process image for background removal
     const processedBuffer = await removeBackground(buffer);
     const processedUrl = await uploadToB2(processedKey, processedBuffer, 'image/png');
 

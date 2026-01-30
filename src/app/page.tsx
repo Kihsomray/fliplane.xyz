@@ -6,6 +6,7 @@ import Logo from '@/components/Logo';
 import BeforeAfterSlider from '@/components/BeforeAfterSlider';
 import { createClient } from '@/lib/supabase/client';
 import type { User } from '@supabase/supabase-js';
+import heic2any from 'heic2any';
 
 const MAX_FREE_TRANSFORMS = 3;
 const STORAGE_KEY = 'fliplane_demo_count';
@@ -84,10 +85,19 @@ export default function Home() {
     setOriginalImage(null);
     setCopied(false);
 
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type)) {
-      setError('Invalid file type. Please upload a JPEG, PNG, WebP, or GIF image.');
-      return;
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
+    
+    // iOS sometimes uploads with empty type or different types for camera roll
+    const isAllowedType = file.type === '' || allowedTypes.includes(file.type);
+    
+    if (!isAllowedType) {
+      // Check extension as fallback
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
+      if (!extension || !allowedExtensions.includes(extension)) {
+        setError('Invalid file type. Please upload a JPEG, PNG, WebP, or GIF image.');
+        return;
+      }
     }
 
     if (file.size > 10 * 1024 * 1024) {
@@ -95,13 +105,49 @@ export default function Home() {
       return;
     }
 
-    const originalUrl = URL.createObjectURL(file);
-    setOriginalImage(originalUrl);
     setProcessing(true);
 
     try {
+      let fileToUpload = file;
+      
+      // Convert HEIC to JPEG client-side before uploading
+      const fileExtension = file.name.split('.').pop()?.toLowerCase();
+      const isHeic = file.type === 'image/heic' || 
+                     file.type === 'image/heif' || 
+                     fileExtension === 'heic' || 
+                     fileExtension === 'heif';
+      
+      if (isHeic) {
+        try {
+          // heic2any returns an array of Blobs
+          const convertedBlobs = await heic2any({
+            blob: file,
+            toType: 'image/jpeg',
+            quality: 0.95
+          });
+          
+          // Get the first converted blob (heic2any can return multiple for multi-image HEIC)
+          const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
+          
+          // Create a new File object with JPEG type
+          fileToUpload = new File(
+            [convertedBlob as Blob],
+            file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+            { type: 'image/jpeg' }
+          );
+        } catch (heicErr) {
+          console.error('HEIC conversion failed:', heicErr);
+          setError('Failed to convert HEIC image. Please convert it to JPEG or PNG first.');
+          setProcessing(false);
+          return;
+        }
+      }
+
+      const originalUrl = URL.createObjectURL(fileToUpload);
+      setOriginalImage(originalUrl);
+
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('image', fileToUpload);
 
       const response = await fetch('/api/demo', {
         method: 'POST',
@@ -374,7 +420,7 @@ export default function Home() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                       onChange={handleFileInput}
                       className="hidden"
                       disabled={processing}

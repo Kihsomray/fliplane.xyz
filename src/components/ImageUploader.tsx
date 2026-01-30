@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import heic2any from 'heic2any';
 
 interface ImageUploaderProps {
   onUploadComplete: () => void;
@@ -42,10 +43,22 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
   const handleFile = async (file: File) => {
     setError(null);
 
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type)) {
-      setError('Invalid file type. Please upload a JPEG, PNG, WebP, or GIF image.');
-      return;
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
+    // On iPhone, photos might be HEIC/HEIF which browser input[type=file] might not automatically convert or accept
+    // depending on iOS version. However, iOS Safari usually converts to JPEG when uploading to web.
+    // We should be lenient with type checking or check extension if type is empty (which can happen).
+    
+    // Check if type is empty or one of the allowed types
+    const isAllowedType = file.type === '' || allowedTypes.includes(file.type);
+    
+    if (!isAllowedType) {
+      // Also check extension as fallback
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
+      if (!extension || !allowedExtensions.includes(extension)) {
+         setError('Invalid file type. Please upload a JPEG, PNG, WebP, or GIF image.');
+         return;
+      }
     }
 
     if (file.size > 10 * 1024 * 1024) {
@@ -54,11 +67,50 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
     }
 
     setUploading(true);
-    setProgress('Uploading...');
+    setProgress('Converting HEIC...');
 
     try {
+      let fileToUpload = file;
+      
+      // Convert HEIC to JPEG client-side before uploading
+      const fileExtension = file.name.split('.').pop()?.toLowerCase();
+      const isHeic = file.type === 'image/heic' || 
+                     file.type === 'image/heif' || 
+                     fileExtension === 'heic' || 
+                     fileExtension === 'heif';
+      
+      if (isHeic) {
+        try {
+          setProgress('Converting HEIC to JPEG...');
+          // heic2any returns an array of Blobs
+          const convertedBlobs = await heic2any({
+            blob: file,
+            toType: 'image/jpeg',
+            quality: 0.95
+          });
+          
+          // Get the first converted blob (heic2any can return multiple for multi-image HEIC)
+          const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
+          
+          // Create a new File object with JPEG type
+          fileToUpload = new File(
+            [convertedBlob as Blob],
+            file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+            { type: 'image/jpeg' }
+          );
+          
+          setProgress('Uploading...');
+        } catch (heicErr) {
+          console.error('HEIC conversion failed:', heicErr);
+          setError('Failed to convert HEIC image. Please convert it to JPEG or PNG first.');
+          return;
+        }
+      } else {
+        setProgress('Uploading...');
+      }
+
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('image', fileToUpload);
 
       setProgress('Processing...');
 
@@ -106,7 +158,7 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp,image/gif"
+          accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
           onChange={handleFileInput}
           className="hidden"
           disabled={uploading}
