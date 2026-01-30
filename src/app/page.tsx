@@ -6,7 +6,6 @@ import Logo from '@/components/Logo';
 import BeforeAfterSlider from '@/components/BeforeAfterSlider';
 import { createClient } from '@/lib/supabase/client';
 import type { User } from '@supabase/supabase-js';
-import heic2any from 'heic2any';
 
 const MAX_FREE_TRANSFORMS = 3;
 const STORAGE_KEY = 'fliplane_demo_count';
@@ -119,6 +118,8 @@ export default function Home() {
       
       if (isHeic) {
         try {
+          // Dynamically import heic2any only when needed (client-side only)
+          const heic2any = (await import('heic2any')).default;
           // heic2any returns an array of Blobs
           const convertedBlobs = await heic2any({
             blob: file,

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import heic2any from 'heic2any';
 
 interface ImageUploaderProps {
   onUploadComplete: () => void;
@@ -82,6 +81,8 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
       if (isHeic) {
         try {
           setProgress('Converting HEIC to JPEG...');
+          // Dynamically import heic2any only when needed (client-side only)
+          const heic2any = (await import('heic2any')).default;
           // heic2any returns an array of Blobs
           const convertedBlobs = await heic2any({
             blob: file,
