@@ -78,6 +78,46 @@ export default function Home() {
     }
   };
 
+  const convertImageViaCanvas = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Canvas conversion failed'));
+              return;
+            }
+            const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
+            const convertedFile = new File([blob], sanitizedName || 'converted-image.jpg', { type: 'image/jpeg' });
+            resolve(convertedFile);
+          },
+          'image/jpeg',
+          0.95
+        );
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Failed to load image'));
+      };
+
+      img.src = url;
+    });
+  };
+
   const handleFile = async (file: File) => {
     setError(null);
     setProcessedImage(null);
@@ -85,12 +125,9 @@ export default function Home() {
     setCopied(false);
 
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
-    
-    // iOS sometimes uploads with empty type or different types for camera roll
     const isAllowedType = file.type === '' || allowedTypes.includes(file.type);
-    
+
     if (!isAllowedType) {
-      // Check extension as fallback
       const extension = file.name.split('.').pop()?.toLowerCase();
       const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
       if (!extension || !allowedExtensions.includes(extension)) {
@@ -108,52 +145,47 @@ export default function Home() {
 
     try {
       let fileToUpload = file;
-      
-      // Convert HEIC to JPEG client-side before uploading
+
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
-      const isHeic = file.type === 'image/heic' || 
-                     file.type === 'image/heif' || 
-                     fileExtension === 'heic' || 
+      const isHeic = file.type === 'image/heic' ||
+                     file.type === 'image/heif' ||
+                     fileExtension === 'heic' ||
                      fileExtension === 'heif';
-      
+
       if (isHeic) {
+        // Try native canvas conversion first (works on iOS Safari with native HEIC support)
         try {
-          // Dynamically import heic2any only when needed (client-side only)
-          const heic2any = (await import('heic2any')).default;
-          // heic2any returns an array of Blobs
-          const convertedBlobs = await heic2any({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.95
-          });
-          
-          // Get the first converted blob (heic2any can return multiple for multi-image HEIC)
-          const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
-          
-          if (!convertedBlob) {
-            throw new Error('HEIC conversion returned no result');
+          fileToUpload = await convertImageViaCanvas(file);
+        } catch (canvasErr) {
+          console.log('Canvas conversion failed, trying heic2any:', canvasErr);
+
+          // Fall back to heic2any for browsers without native HEIC support
+          try {
+            const heic2any = (await import('heic2any')).default;
+            const convertedBlobs = await heic2any({
+              blob: file,
+              toType: 'image/jpeg',
+              quality: 0.95
+            });
+
+            const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
+
+            if (!convertedBlob) {
+              throw new Error('HEIC conversion returned no result');
+            }
+
+            const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
+            fileToUpload = new File(
+              [convertedBlob as Blob],
+              sanitizedName || 'converted-image.jpg',
+              { type: 'image/jpeg' }
+            );
+          } catch (heicErr) {
+            console.error('HEIC conversion failed:', heicErr);
+            setError('Failed to convert HEIC image. Please use your device\'s photo app to convert it to JPEG first.');
+            setProcessing(false);
+            return;
           }
-          
-          // Sanitize filename to avoid invalid characters
-          const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
-          
-          // Create a new File object with JPEG type
-          fileToUpload = new File(
-            [convertedBlob as Blob],
-            sanitizedName || 'converted-image.jpg',
-            { type: 'image/jpeg' }
-          );
-        } catch (heicErr) {
-          console.error('HEIC conversion failed:', heicErr);
-          const errorMessage = heicErr instanceof Error ? heicErr.message : 'Unknown error';
-          // Check if it's the specific "pattern" error
-          if (errorMessage.includes('pattern') || errorMessage.includes('atob') || errorMessage.includes('btoa')) {
-            setError('HEIC file format issue. Please try converting the image to JPEG using your device\'s photo app first.');
-          } else {
-            setError(`Failed to convert HEIC image: ${errorMessage}. Please convert it to JPEG or PNG first.`);
-          }
-          setProcessing(false);
-          return;
         }
       }
 

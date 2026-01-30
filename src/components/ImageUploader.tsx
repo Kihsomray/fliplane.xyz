@@ -39,19 +39,53 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
     }
   };
 
+  const convertImageViaCanvas = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Canvas conversion failed'));
+              return;
+            }
+            const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
+            const convertedFile = new File([blob], sanitizedName || 'converted-image.jpg', { type: 'image/jpeg' });
+            resolve(convertedFile);
+          },
+          'image/jpeg',
+          0.95
+        );
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Failed to load image'));
+      };
+
+      img.src = url;
+    });
+  };
+
   const handleFile = async (file: File) => {
     setError(null);
 
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
-    // On iPhone, photos might be HEIC/HEIF which browser input[type=file] might not automatically convert or accept
-    // depending on iOS version. However, iOS Safari usually converts to JPEG when uploading to web.
-    // We should be lenient with type checking or check extension if type is empty (which can happen).
-    
-    // Check if type is empty or one of the allowed types
     const isAllowedType = file.type === '' || allowedTypes.includes(file.type);
-    
+
     if (!isAllowedType) {
-      // Also check extension as fallback
       const extension = file.name.split('.').pop()?.toLowerCase();
       const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'];
       if (!extension || !allowedExtensions.includes(extension)) {
@@ -66,58 +100,55 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
     }
 
     setUploading(true);
-    setProgress('Converting HEIC...');
+    setProgress('Processing...');
 
     try {
       let fileToUpload = file;
-      
-      // Convert HEIC to JPEG client-side before uploading
+
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
-      const isHeic = file.type === 'image/heic' || 
-                     file.type === 'image/heif' || 
-                     fileExtension === 'heic' || 
+      const isHeic = file.type === 'image/heic' ||
+                     file.type === 'image/heif' ||
+                     fileExtension === 'heic' ||
                      fileExtension === 'heif';
-      
+
       if (isHeic) {
+        setProgress('Converting HEIC to JPEG...');
+
+        // Try native canvas conversion first (works on iOS Safari with native HEIC support)
         try {
-          setProgress('Converting HEIC to JPEG...');
-          // Dynamically import heic2any only when needed (client-side only)
-          const heic2any = (await import('heic2any')).default;
-          // heic2any returns an array of Blobs
-          const convertedBlobs = await heic2any({
-            blob: file,
-            toType: 'image/jpeg',
-            quality: 0.95
-          });
-          
-          // Get the first converted blob (heic2any can return multiple for multi-image HEIC)
-          const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
-          
-          if (!convertedBlob) {
-            throw new Error('HEIC conversion returned no result');
-          }
-          
-          // Sanitize filename to avoid invalid characters
-          const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
-          
-          // Create a new File object with JPEG type
-          fileToUpload = new File(
-            [convertedBlob as Blob],
-            sanitizedName || 'converted-image.jpg',
-            { type: 'image/jpeg' }
-          );
-          
+          fileToUpload = await convertImageViaCanvas(file);
           setProgress('Uploading...');
-        } catch (heicErr) {
-          console.error('HEIC conversion failed:', heicErr);
-          const errorMessage = heicErr instanceof Error ? heicErr.message : 'Unknown error';
-          // Check if it's the specific "pattern" error
-          if (errorMessage.includes('pattern') || errorMessage.includes('atob') || errorMessage.includes('btoa')) {
-            setError('HEIC file format issue. Please try converting the image to JPEG using your device\'s photo app first.');
-          } else {
-            setError(`Failed to convert HEIC image: ${errorMessage}. Please convert it to JPEG or PNG first.`);
+        } catch (canvasErr) {
+          console.log('Canvas conversion failed, trying heic2any:', canvasErr);
+
+          // Fall back to heic2any for browsers without native HEIC support
+          try {
+            const heic2any = (await import('heic2any')).default;
+            const convertedBlobs = await heic2any({
+              blob: file,
+              toType: 'image/jpeg',
+              quality: 0.95
+            });
+
+            const convertedBlob = Array.isArray(convertedBlobs) ? convertedBlobs[0] : convertedBlobs;
+
+            if (!convertedBlob) {
+              throw new Error('HEIC conversion returned no result');
+            }
+
+            const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.(heic|heif)$/i, '.jpg');
+            fileToUpload = new File(
+              [convertedBlob as Blob],
+              sanitizedName || 'converted-image.jpg',
+              { type: 'image/jpeg' }
+            );
+
+            setProgress('Uploading...');
+          } catch (heicErr) {
+            console.error('HEIC conversion failed:', heicErr);
+            setError('Failed to convert HEIC image. Please use your device\'s photo app to convert it to JPEG first.');
+            return;
           }
-          return;
         }
       } else {
         setProgress('Uploading...');
@@ -163,8 +194,8 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
           relative rounded-xl p-8 text-center cursor-pointer
           border border-dashed transition-all duration-200
           ${dragging
-            ? 'border-[var(--accent-red)] bg-[var(--accent-red)]/5'
-            : 'border-[var(--border-light)] hover:border-[var(--accent-red)]/50 bg-[var(--bg-tertiary)]'
+            ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]/5'
+            : 'border-[var(--border-light)] hover:border-[var(--accent-blue)]/50 bg-[var(--bg-tertiary)]'
           }
           ${uploading ? 'pointer-events-none opacity-70' : ''}
         `}
@@ -182,14 +213,14 @@ export default function ImageUploader({ onUploadComplete }: ImageUploaderProps) 
           <div
             className={`
               mx-auto w-12 h-12 rounded-xl flex items-center justify-center
-              ${dragging ? 'bg-[var(--accent-red)]/10' : 'bg-[var(--bg-card)]'}
+              ${dragging ? 'bg-[var(--accent-blue)]/10' : 'bg-[var(--bg-card)]'}
             `}
           >
             {uploading ? (
-              <div className="w-6 h-6 border-2 border-[var(--accent-red)]/30 border-t-[var(--accent-red)] rounded-full animate-spin" />
+              <div className="w-6 h-6 border-2 border-[var(--accent-blue)]/30 border-t-[var(--accent-blue)] rounded-full animate-spin" />
             ) : (
               <svg
-                className={`h-6 w-6 ${dragging ? 'text-[var(--accent-red)]' : 'text-[var(--text-muted)]'}`}
+                className={`h-6 w-6 ${dragging ? 'text-[var(--accent-blue)]' : 'text-[var(--text-muted)]'}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
